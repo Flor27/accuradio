@@ -4,6 +4,8 @@ import os.path
 import argparse
 import json
 import shutil
+from Queue import Queue
+from threading import Thread
 
 from urllib2 import build_opener, HTTPCookieProcessor, Request, HTTPHandler
 from urllib import urlencode
@@ -18,6 +20,10 @@ URL = 'http://www.accuradio.com'
 cj = CookieJar()
 handler = HTTPHandler(debuglevel=0)
 opener = build_opener(handler, HTTPCookieProcessor(cj))
+
+queue = Queue()
+# how many thread for downloading songs
+THREAD_AMOUNT = 20
 
 
 def fetch_channels(genre):
@@ -89,30 +95,52 @@ def fetch(channel, cid):
         if 'primary' not in song:
             continue
 
-        fname = os.path.basename(song['fn']) + '.m4a'
-        if os.path.exists(fname):
-            continue
+        # add song to queue, let threads to download
+        queue.put(song)
 
-        if fname.startswith('index'):
-            print song
 
-        if fname.startswith('protocol'):
-            print song
+def download_song(song):
+    fname = os.path.basename(song['fn']) + '.m4a'
+    if os.path.exists(fname):
+        return
 
-        url = song['primary'] + song['fn'] + '.m4a'
-        try:
-            resp = opener.open(url)
-        except:
-            continue
+    if fname.startswith('index'):
+        print song
 
-        print url
+    if fname.startswith('protocol'):
+        print song
 
-        fd, tmpfname = mkstemp()
-        with closing(os.fdopen(fd, 'w')) as tmpfile:
-            shutil.copyfileobj(resp, tmpfile)
+    url = song['primary'] + song['fn'] + '.m4a'
+    try:
+        resp = opener.open(url)
+    except:
+        return
 
-        shutil.move(tmpfname, fname)
-        set_tags(fname, song)
+    print url
+
+    fd, tmpfname = mkstemp()
+    with closing(os.fdopen(fd, 'w')) as tmpfile:
+        shutil.copyfileobj(resp, tmpfile)
+
+    shutil.move(tmpfname, fname)
+    set_tags(fname, song)
+
+
+class DownloadThread(Thread):
+
+    def __init__(self, queue):
+        Thread.__init__(self)
+        self.queue = queue
+
+    def run(self):
+        while True:
+            # get the song from queue
+            song = self.queue.get()
+
+            download_song(song)
+
+            # mark the song as downloaded
+            self.queue.task_done()
 
 
 if __name__ == '__main__':
@@ -123,6 +151,15 @@ if __name__ == '__main__':
 
     channels = fetch_channels(args.genre)
     if args.channel and args.channel in channels:
+        # create THREAD_AMOUNT of threads to download songs
+        for i in range(THREAD_AMOUNT):
+            thread = DownloadThread(queue)
+            thread.setDaemon(True)
+            thread.start()
+
         fetch(args.channel, channels[args.channel])
     else:
         print '\n'.join(sorted(channels))
+
+    # wait for all songs to download
+    queue.join()
