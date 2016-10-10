@@ -8,7 +8,7 @@ from Queue import Queue
 from threading import Thread
 
 from urllib2 import build_opener, HTTPCookieProcessor, Request, HTTPHandler
-from urllib import urlencode
+from urllib import urlencode, quote
 from cookielib import CookieJar
 from tempfile import mkstemp
 from contextlib import closing
@@ -20,6 +20,11 @@ URL = 'http://www.accuradio.com'
 cj = CookieJar()
 handler = HTTPHandler(debuglevel=0)
 opener = build_opener(handler, HTTPCookieProcessor(cj))
+opener.addheaders = [
+        ('User-agent', 'Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/53.0.2785.143 Safari/537.36'),
+        ('Accept', '*/*'),
+        ('Accept-Encoding','deflate')
+]
 
 queue = Queue()
 # how many thread for downloading songs
@@ -27,11 +32,11 @@ THREAD_AMOUNT = 20
 
 
 def fetch_channels(genre):
-    resp = opener.open('{}/finder/2013/channels/{}/?s=2013'.format(URL, genre))
+    resp = opener.open('{}/search/{}/'.format(URL,  quote(genre)))
     content = resp.read()
     root = html.fromstring(content)
-    return {r.attrib['data-name']: r.attrib['data-id']
-        for r in root.xpath('//a[@data-id and @data-name]')}
+    return {r.attrib['title'].replace('Listen to ',''): r.attrib['data-id']
+        for r in root.xpath('//a[@data-id and @title]')}
 
 
 def fetch_channel_meta(channel, cid):
