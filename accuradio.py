@@ -17,6 +17,8 @@ from subprocess import Popen, PIPE
 from lxml import html
 
 URL = 'http://www.accuradio.com'
+CDN_COVERS = 'http://cdn.accuradio.com/static/images/covers300'
+
 cj = CookieJar()
 handler = HTTPHandler(debuglevel=0)
 opener = build_opener(handler, HTTPCookieProcessor(cj))
@@ -26,10 +28,17 @@ opener.addheaders = [
         ('Accept-Encoding','deflate')
 ]
 
+DL_PATH = ''
+
 queue = Queue()
 # how many thread for downloading songs
-THREAD_AMOUNT = 20
+THREAD_AMOUNT = 3
 
+# Do we have to download then add cover to downloaded music file ?
+ADD_COVER = 1
+
+# Keep the cover file ?
+KEEP_COVER_FILE = 0
 
 def fetch_channels(genre):
     resp = opener.open('{}/search/{}/'.format(URL,  quote(genre)))
@@ -87,7 +96,13 @@ def set_tags(fname, info):
     opts.extend(('-s', info['title']))
     opts = [r.encode('utf-8') for r in opts]
 
-    Popen(['mp4tags'] + opts + [fname]).poll()
+    Popen(['mp4tags'] + opts + [fname]).wait()
+
+
+def set_cover(fname, fcname):
+    opts = ['--add', fcname, fname]
+
+    Popen(['mp4art'] + opts).wait()
 
 
 def fetch(channel, cid):
@@ -95,19 +110,58 @@ def fetch(channel, cid):
     ando = meta['ando']
     schedule = meta['spotschedule']
     playlist = fetch_playlist(cid, ando, schedule)
-
+    i = 0
     for song in playlist:
+        i = i + 1
         if 'primary' not in song:
             continue
 
         # add song to queue, let threads to download
         queue.put(song)
+    print 'Nb tot: '
+    print i
+    print '\n'
+
+
+def download_cover(song, fname):
+    if 'album' not in song:
+	return
+
+    if 'cdcover' not in song['album']:
+	return
+
+    fcname = DL_PATH + os.path.basename(song['album']['cdcover'])
+    if os.path.exists(fcname):
+        return
+
+    # print fcname
+
+    url = CDN_COVERS + song['album']['cdcover']
+    try:
+        resp = opener.open(url)
+    except:
+        return
+
+    # print url
+
+    fd, tmpfcname = mkstemp()
+    with closing(os.fdopen(fd, 'w')) as tmpfile:
+        shutil.copyfileobj(resp, tmpfile)
+
+    shutil.move(tmpfcname, fcname)
+
+    set_cover(fname, fcname)
+
+    if KEEP_COVER_FILE != 1:
+	os.remove(fcname)
 
 
 def download_song(song):
-    fname = os.path.basename(song['fn']) + '.m4a'
+    fname = DL_PATH + os.path.basename(song['fn']) + '.m4a'
     if os.path.exists(fname):
         return
+
+    print fname
 
     if fname.startswith('index'):
         print song
@@ -121,7 +175,7 @@ def download_song(song):
     except:
         return
 
-    print url
+    # print url
 
     fd, tmpfname = mkstemp()
     with closing(os.fdopen(fd, 'w')) as tmpfile:
@@ -129,7 +183,8 @@ def download_song(song):
 
     shutil.move(tmpfname, fname)
     set_tags(fname, song)
-
+    if ADD_COVER == 1:
+        download_cover(song, fname)
 
 class DownloadThread(Thread):
 
@@ -152,7 +207,10 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='fetch music from accuradio.com')
     parser.add_argument('genre', help='something like jazz or adultalternative')
     parser.add_argument('channel', help='Groove Jazz or Latin Jazz', nargs='?', default=None)
+    parser.add_argument('downloadPath', help='any path', nargs='?', default='./')
     args = parser.parse_args()
+
+    DL_PATH = args.downloadPath
 
     channels = fetch_channels(args.genre)
     if args.channel and args.channel in channels:
@@ -164,6 +222,7 @@ if __name__ == '__main__':
 
         fetch(args.channel, channels[args.channel])
     else:
+        print 'List of channel found :\n'
         print '\n'.join(sorted(channels))
 
     # wait for all songs to download
