@@ -4,6 +4,8 @@ import os.path
 import argparse
 import json
 import shutil
+import random
+
 from Queue import Queue
 from threading import Thread
 
@@ -40,6 +42,15 @@ ADD_COVER = 1
 # Keep the cover file ?
 KEEP_COVER_FILE = 0
 
+# Infinite DL ?
+INFINITE_DL = 1
+
+# Counts
+dledFiles = 0
+AlldledFiles = 0
+nbStages = 3
+lastStage = nbStages
+
 def fetch_channels(genre):
     resp = opener.open('{}/search/{}/'.format(URL,  quote(genre)))
     content = resp.read()
@@ -72,8 +83,8 @@ def fetch_channel_meta(channel, cid):
 
 
 def fetch_playlist(cid, ando, schedule):
-    url = '{}/playlist/json/{}/?ando={}&intro=true&spotschedule={}&fa=null'.format(
-        URL, cid, ando, schedule)
+    url = '{}/playlist/json/{}/?ando={}&intro=true&spotschedule={}&fa=null&rand={}'.format(
+        URL, cid, ando, schedule,random.random())
     resp = opener.open(url)
     return json.load(resp)
 
@@ -112,56 +123,55 @@ def fetch(channel, cid):
     playlist = fetch_playlist(cid, ando, schedule)
     i = 0
     for song in playlist:
-        i = i + 1
         if 'primary' not in song:
             continue
 
+        i = i + 1
         # add song to queue, let threads to download
         queue.put(song)
-    print 'Nb tot: '
-    print i
-    print '\n'
+    print 'Nb tot: {}\n'.format(i)
 
 
 def download_cover(song, fname):
     if 'album' not in song:
-	return
+        return
 
     if 'cdcover' not in song['album']:
-	return
+        return
 
     fcname = DL_PATH + os.path.basename(song['album']['cdcover'])
-    if os.path.exists(fcname):
-        return
+    if not (os.path.exists(fcname)):
 
-    # print fcname
+        # print fcname
 
-    url = CDN_COVERS + song['album']['cdcover']
-    try:
-        resp = opener.open(url)
-    except:
-        return
+        url = CDN_COVERS + song['album']['cdcover']
+        try:
+            resp = opener.open(url)
+        except:
+            return
 
-    # print url
+        # print url
 
-    fd, tmpfcname = mkstemp()
-    with closing(os.fdopen(fd, 'w')) as tmpfile:
-        shutil.copyfileobj(resp, tmpfile)
+        fd, tmpfcname = mkstemp()
+        with closing(os.fdopen(fd, 'w')) as tmpfile:
+            shutil.copyfileobj(resp, tmpfile)
 
-    shutil.move(tmpfcname, fcname)
+        shutil.move(tmpfcname, fcname)
 
     set_cover(fname, fcname)
 
     if KEEP_COVER_FILE != 1:
-	os.remove(fcname)
+        os.remove(fcname)
 
 
 def download_song(song):
+    global dledFiles
     fname = DL_PATH + os.path.basename(song['fn']) + '.m4a'
     if os.path.exists(fname):
+        print 'Already DLed : '+fname
         return
 
-    print fname
+    print '! Now Dlding : ' + fname
 
     if fname.startswith('index'):
         print song
@@ -182,6 +192,8 @@ def download_song(song):
         shutil.copyfileobj(resp, tmpfile)
 
     shutil.move(tmpfname, fname)
+
+    dledFiles = dledFiles + 1
     set_tags(fname, song)
     if ADD_COVER == 1:
         download_cover(song, fname)
@@ -220,10 +232,29 @@ if __name__ == '__main__':
             thread.setDaemon(True)
             thread.start()
 
-        fetch(args.channel, channels[args.channel])
+        while True:
+            fetch(args.channel, channels[args.channel])
+            # wait for all songs to download
+            queue.join()
+
+            if dledFiles == 0:
+                lastStage = lastStage -1
+                if lastStage > 0:
+                    print 'Another loop...'
+                else:
+                    print '*******************************************'
+                    print 'Ended so far ! Dleded files : {}'.format(AlldledFiles)
+                    break
+            else:
+                lastStage = nbStages
+
+            AlldledFiles = AlldledFiles + dledFiles
+            print '**************'
+            print 'Dlded so far : {}\n'.format(AlldledFiles)
+            if INFINITE_DL != 1:
+                break
+
+            dledFiles = 0
     else:
         print 'List of channel found :\n'
         print '\n'.join(sorted(channels))
-
-    # wait for all songs to download
-    queue.join()
